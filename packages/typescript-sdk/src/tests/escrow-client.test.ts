@@ -175,10 +175,51 @@ test("ContractSpec is accessible via client.spec", () => {
   );
 });
 
-test("ABI exposes exactly the 11 expected function names", () => {
+test("ABI exposes the complete regenerated escrow function names", () => {
   const client = new Client({ ...networks.testnet, rpcUrl: DUMMY_RPC_URL });
   const funcNames = client.spec.funcs().map((f) => f.name().toString());
-  const sortedExpected = [...EXPECTED_METHODS].sort();
+  const sortedExpected = [
+    "approve_release",
+    "cancel",
+    "cancel_basket",
+    "create_basket",
+    "create_escrow",
+    "create_escrow_with_arbiter_fee",
+    "create_escrow_with_review",
+    "deposit",
+    "deposit_basket",
+    "dispute",
+    "dispute_basket",
+    "escrows_for_participant",
+    "execute_release",
+    "extend_basket_deadline",
+    "extend_deadline",
+    "get_action_summary",
+    "get_arbiter_fee_bps",
+    "get_basket",
+    "get_basket_action_summary",
+    "get_escrow",
+    "get_release_request",
+    "get_status",
+    "preflight_deposit",
+    "refund",
+    "refund_basket",
+    "refund_expired",
+    "release",
+    "release_basket",
+    "release_partial",
+    "release_partial_basket",
+    "replace_arbiter",
+    "replace_basket_arbiter",
+    "request_release",
+    "request_release_basket",
+    "resolve",
+    "resolve_basket",
+    "resolve_split",
+    "review_period",
+    "touch_ttl",
+    "ttl_info",
+  ].sort();
   const sortedActual = [...funcNames].sort();
   assert.deepEqual(
     sortedActual,

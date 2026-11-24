@@ -319,7 +319,11 @@ export const ForgeError = {
    * [`ForgeError::InvalidInput`] so a wallet can explain why the refund
    * was refused and offer the dispute path.
    */
-  16: {message:"ReleasePending"}
+  16: {message:"ReleasePending"},
+  /**
+   * The current lifecycle state does not allow the operation.
+   */
+  17: {message:"InvalidState"}
 }
 
 export interface Client {
@@ -462,6 +466,12 @@ export interface Client {
   reassign_beneficiary: ({schedule_id, new_beneficiary}: {schedule_id: u64, new_beneficiary: string}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
 
   /**
+   * Construct and simulate a schedules_for_funder transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * List schedule IDs in creation order for the recorded funder.
+   */
+  schedules_for_funder: ({funder, offset, limit}: {funder: string, offset: u32, limit: u32}, options?: MethodOptions) => Promise<AssembledTransaction<Result<Array<u64>>>>
+
+  /**
    * Construct and simulate a create_schedules_batch transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Create multiple linear vesting schedules in one atomic call.
    *
@@ -512,6 +522,12 @@ export interface Client {
    * the refund; the schedule is left unchanged.
    */
   revoke_tranche_schedule: ({schedule_id}: {schedule_id: u64}, options?: MethodOptions) => Promise<AssembledTransaction<Result<i128>>>
+
+  /**
+   * Construct and simulate a schedules_for_beneficiary transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   * List schedule IDs in creation order for the current beneficiary.
+   */
+  schedules_for_beneficiary: ({beneficiary, offset, limit}: {beneficiary: string, offset: u32, limit: u32}, options?: MethodOptions) => Promise<AssembledTransaction<Result<Array<u64>>>>
 
 }
 export class Client extends ContractClient {
@@ -571,6 +587,7 @@ export class Client extends ContractClient {
         create_schedule: this.txFromJSON<Result<u64>>,
         get_tranche_schedule: this.txFromJSON<Result<TrancheSchedule>>,
         reassign_beneficiary: this.txFromJSON<Result<void>>,
+        schedules_for_funder: this.txFromJSON<Result<Array<u64>>>,
         create_schedules_batch: this.txFromJSON<Result<Array<u64>>>,
         create_tranche_schedule: this.txFromJSON<Result<u64>>,
         revoke_tranche_schedule: this.txFromJSON<Result<i128>>
