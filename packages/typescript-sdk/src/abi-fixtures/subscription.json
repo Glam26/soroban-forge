@@ -3,6 +3,22 @@
   "contract": "soroban-forge-subscription-payments",
   "functions": [
     {
+      "name": "accept_provider",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u64"
+        },
+        {
+          "name": "provider",
+          "type": "address"
+        }
+      ],
+      "outputs": [
+        "result<void,udt:ForgeError>"
+      ]
+    },
+    {
       "name": "authorize_provider",
       "inputs": [
         {
@@ -40,6 +56,34 @@
       ],
       "outputs": [
         "result<void,udt:ForgeError>"
+      ]
+    },
+    {
+      "name": "cancel_provider_change",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u64"
+        }
+      ],
+      "outputs": [
+        "result<void,udt:ForgeError>"
+      ]
+    },
+    {
+      "name": "change_plan",
+      "inputs": [
+        {
+          "name": "subscription_id",
+          "type": "u64"
+        },
+        {
+          "name": "new_amount",
+          "type": "i128"
+        }
+      ],
+      "outputs": [
+        "result<i128,udt:ForgeError>"
       ]
     },
     {
@@ -178,6 +222,18 @@
       ]
     },
     {
+      "name": "grace_deadline",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u64"
+        }
+      ],
+      "outputs": [
+        "result<option<u64>,udt:ForgeError>"
+      ]
+    },
+    {
       "name": "is_provider_authorized",
       "inputs": [
         {
@@ -199,6 +255,50 @@
         {
           "name": "subscription_id",
           "type": "u64"
+        }
+      ],
+      "outputs": [
+        "result<void,udt:ForgeError>"
+      ]
+    },
+    {
+      "name": "pending_provider",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u64"
+        }
+      ],
+      "outputs": [
+        "result<option<address>,udt:ForgeError>"
+      ]
+    },
+    {
+      "name": "preview_catchup",
+      "inputs": [
+        {
+          "name": "subscription_id",
+          "type": "u64"
+        },
+        {
+          "name": "max_periods",
+          "type": "u32"
+        }
+      ],
+      "outputs": [
+        "result<udt:CatchupPreview,udt:ForgeError>"
+      ]
+    },
+    {
+      "name": "propose_provider",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u64"
+        },
+        {
+          "name": "provider",
+          "type": "address"
         }
       ],
       "outputs": [
@@ -266,6 +366,38 @@
       ]
     },
     {
+      "name": "rollover_remaining",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u64"
+        },
+        {
+          "name": "metric",
+          "type": "symbol"
+        }
+      ],
+      "outputs": [
+        "result<u64,udt:ForgeError>"
+      ]
+    },
+    {
+      "name": "set_grace_period",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u64"
+        },
+        {
+          "name": "seconds",
+          "type": "u64"
+        }
+      ],
+      "outputs": [
+        "result<void,udt:ForgeError>"
+      ]
+    },
+    {
       "name": "set_quotas",
       "inputs": [
         {
@@ -275,6 +407,26 @@
         {
           "name": "quotas",
           "type": "vec<udt:MetricQuota>"
+        }
+      ],
+      "outputs": [
+        "result<void,udt:ForgeError>"
+      ]
+    },
+    {
+      "name": "set_rollover_cap",
+      "inputs": [
+        {
+          "name": "id",
+          "type": "u64"
+        },
+        {
+          "name": "metric",
+          "type": "symbol"
+        },
+        {
+          "name": "cap",
+          "type": "u64"
         }
       ],
       "outputs": [
@@ -548,6 +700,28 @@
       ]
     },
     {
+      "name": "PlanChanged",
+      "dataFormat": "scSpecEventDataFormatMap",
+      "params": [
+        {
+          "name": "subscription_id",
+          "type": "u64"
+        },
+        {
+          "name": "old_amount",
+          "type": "i128"
+        },
+        {
+          "name": "new_amount",
+          "type": "i128"
+        },
+        {
+          "name": "credit",
+          "type": "i128"
+        }
+      ]
+    },
+    {
       "name": "QuotasSet",
       "dataFormat": "scSpecEventDataFormatMap",
       "params": [
@@ -632,6 +806,28 @@
       ]
     },
     {
+      "kind": "struct",
+      "name": "CatchupPreview",
+      "fields": [
+        {
+          "name": "arrears_remaining",
+          "type": "i128"
+        },
+        {
+          "name": "chargeable_amount",
+          "type": "i128"
+        },
+        {
+          "name": "prepaid_consumed",
+          "type": "i128"
+        },
+        {
+          "name": "resulting_status",
+          "type": "udt:SubscriptionStatus"
+        }
+      ]
+    },
+    {
       "kind": "error-enum",
       "name": "ForgeError",
       "variants": [
@@ -698,6 +894,10 @@
         {
           "name": "ReleasePending",
           "value": 16
+        },
+        {
+          "name": "InvalidState",
+          "value": 17
         }
       ]
     },
@@ -894,6 +1094,10 @@
     {
       "name": "ReleasePending",
       "code": 16
+    },
+    {
+      "name": "InvalidState",
+      "code": 17
     }
   ]
 }
