@@ -327,6 +327,13 @@ pub trait SorobanForgeSubscriptionPayments {
         period: u64,
     ) -> Result<u64, soroban_forge_shared_utils::ForgeError>;
 
+    fn change_plan(env: Env, subscription_id: u64, new_amount: i128) -> Result<i128, ForgeError>;
+    fn preview_catchup(
+        env: Env,
+        subscription_id: u64,
+        max_periods: u32,
+    ) -> Result<CatchupPreview, ForgeError>;
+
     /// Subscribe `subscriber` to `provider`'s service with a free trial whose
     /// first charge is due at `now + trial_seconds`. Returns the stable
     /// subscription id.
@@ -770,10 +777,23 @@ enum DataKey {
     /// Persistent; written by `configure_auto_topup`, removed by
     /// `disable_auto_topup`, read by `charge`.
     AutoTopup(u64),
+    PlanCredit(u64),
+    GracePeriod(u64),
+    GraceDeadline(u64),
+    PendingProvider(u64),
+    RolloverCap(u64, Symbol),
+    RolloverUnits(u64, Symbol),
     /// Trial end timestamp for a subscription created via
     /// `subscribe_with_trial`. Stored under its own persistent key so the
     /// `Subscription` record layout remains compatible.
     TrialEnd(u64),
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RolloverBalance {
+    period_start: u64,
+    units: u64,
 }
 
 /// The deployable subscription payments contract.
@@ -886,6 +906,166 @@ impl SubscriptionPayments {
         provider.require_auth();
 
         Self::create_subscription(&env, subscriber, provider, token, amount, period)
+    }
+
+    /// Opt into grace of 1 second to 30 days. Zero restores the legacy
+    /// three-attempt policy. Terms may only change while Active.
+    pub fn set_grace_period(env: Env, id: u64, seconds: u64) -> Result<(), ForgeError> {
+        let sub = Self::get_subscription_impl(&env, id)?;
+        sub.subscriber.require_auth();
+        if sub.status != SubscriptionStatus::Active || seconds > MAX_GRACE_SECONDS {
+            return Err(ForgeError::InvalidInput);
+        }
+        let key = DataKey::GracePeriod(id);
+        if seconds == 0 {
+            env.storage().persistent().remove(&key);
+        } else {
+            env.storage().persistent().set(&key, &seconds);
+            bump_entry(&env, &key);
+        }
+        Ok(())
+    }
+
+    pub fn grace_deadline(env: Env, id: u64) -> Result<Option<u64>, ForgeError> {
+        Self::get_subscription_impl(&env, id)?;
+        Ok(env.storage().persistent().get(&DataKey::GraceDeadline(id)))
+    }
+
+    /// Subscriber consent is bound to this subscription and proposed address.
+    pub fn propose_provider(env: Env, id: u64, provider: Address) -> Result<(), ForgeError> {
+        let sub = Self::get_subscription_impl(&env, id)?;
+        sub.subscriber.require_auth();
+        if sub.status == SubscriptionStatus::Cancelled || provider == sub.provider {
+            return Err(ForgeError::InvalidInput);
+        }
+        let key = DataKey::PendingProvider(id);
+        env.storage().persistent().set(&key, &provider);
+        bump_entry(&env, &key);
+        Ok(())
+    }
+
+    pub fn cancel_provider_change(env: Env, id: u64) -> Result<(), ForgeError> {
+        let sub = Self::get_subscription_impl(&env, id)?;
+        sub.subscriber.require_auth();
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PendingProvider(id));
+        Ok(())
+    }
+
+    pub fn pending_provider(env: Env, id: u64) -> Result<Option<Address>, ForgeError> {
+        Self::get_subscription_impl(&env, id)?;
+        Ok(env
+            .storage()
+            .persistent()
+            .get(&DataKey::PendingProvider(id)))
+    }
+
+    pub fn accept_provider(env: Env, id: u64, provider: Address) -> Result<(), ForgeError> {
+        let mut sub = Self::get_subscription_impl(&env, id)?;
+        if sub.status == SubscriptionStatus::Cancelled
+            || env
+                .storage()
+                .persistent()
+                .get::<_, Address>(&DataKey::PendingProvider(id))
+                != Some(provider.clone())
+        {
+            return Err(ForgeError::InvalidInput);
+        }
+        provider.require_auth();
+        let old_key = DataKey::ProviderSubscriptions(sub.provider.clone());
+        let mut old_ids = Self::index_ids(&env, &old_key);
+        if let Some(index) = old_ids.first_index_of(id) {
+            old_ids.remove(index);
+        }
+        env.storage().persistent().set(&old_key, &old_ids);
+        bump_entry(&env, &old_key);
+        // Insert by creation id to preserve the documented index ordering.
+        let new_key = DataKey::ProviderSubscriptions(provider.clone());
+        let mut new_ids = Self::index_ids(&env, &new_key);
+        let at = new_ids
+            .iter()
+            .position(|existing| existing > id)
+            .unwrap_or(new_ids.len() as usize);
+        new_ids.insert(at as u32, id);
+        env.storage().persistent().set(&new_key, &new_ids);
+        bump_entry(&env, &new_key);
+        sub.provider = provider;
+        Self::store_subscription(&env, id, &sub);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::PendingProvider(id));
+        Ok(())
+    }
+
+    /// Cap unused units carried forward. Cap plus included units must fit
+    /// in u64. Changing terms requires an unused Active period.
+    pub fn set_rollover_cap(env: Env, id: u64, metric: Symbol, cap: u64) -> Result<(), ForgeError> {
+        let sub = Self::get_subscription_impl(&env, id)?;
+        sub.subscriber.require_auth();
+        let quota = sub
+            .quotas
+            .iter()
+            .find(|quota| quota.metric == metric)
+            .ok_or(ForgeError::InvalidInput)?;
+        if sub.status != SubscriptionStatus::Active
+            || Self::has_recorded_usage(&env, &sub)
+            || cap.checked_add(quota.included_units).is_none()
+        {
+            return Err(ForgeError::InvalidInput);
+        }
+        let key = DataKey::RolloverCap(id, metric.clone());
+        if cap == 0 {
+            env.storage().persistent().remove(&key);
+        } else {
+            env.storage().persistent().set(&key, &cap);
+            bump_entry(&env, &key);
+        }
+        env.storage()
+            .persistent()
+            .remove(&DataKey::RolloverUnits(id, metric));
+        Ok(())
+    }
+
+    /// Remaining carried units after recorded usage, before base allocation.
+    pub fn rollover_remaining(env: Env, id: u64, metric: Symbol) -> Result<u64, ForgeError> {
+        let sub = Self::get_subscription_impl(&env, id)?;
+        if !declares_metric(&sub, &metric) {
+            return Err(ForgeError::InvalidInput);
+        }
+        let used =
+            Self::read_open_period_usage(&env, &sub, &metric).map_or(0, |record| record.units);
+        Ok(Self::opening_rollover(&env, &sub, &metric).saturating_sub(used))
+    }
+
+    fn opening_rollover(env: &Env, sub: &Subscription, metric: &Symbol) -> u64 {
+        env.storage()
+            .persistent()
+            .get::<_, RolloverBalance>(&DataKey::RolloverUnits(sub.subscription_id, metric.clone()))
+            .filter(|record| record.period_start == sub.last_charged)
+            .map_or(0, |record| record.units)
+    }
+
+    fn renew_policies(env: &Env, sub: &Subscription) {
+        for key in [
+            DataKey::GracePeriod(sub.subscription_id),
+            DataKey::GraceDeadline(sub.subscription_id),
+            DataKey::PendingProvider(sub.subscription_id),
+        ] {
+            if env.storage().persistent().has(&key) {
+                bump_entry(env, &key);
+            }
+        }
+        for quota in sub.quotas.iter() {
+            for key in [
+                DataKey::RolloverCap(sub.subscription_id, quota.metric.clone()),
+                DataKey::RolloverUnits(sub.subscription_id, quota.metric),
+            ] {
+                if env.storage().persistent().has(&key) {
+                    bump_entry(env, &key);
+                }
+            }
+        }
     }
 
     /// Create a subscription with a free trial whose first charge is due at
@@ -1025,61 +1205,33 @@ impl SubscriptionPayments {
                 Self::record_failed_charge(&env, &mut subscription)?;
                 return Ok(0);
             }
-            let remaining = balance
-                .checked_sub(amount)
-                .ok_or(ForgeError::ArithmeticOverflow)?;
-            let transfer_result = token::TokenClient::new(&env, &subscription.token).try_transfer(
-                &env.current_contract_address(),
-                &subscription.provider,
-                &amount,
-            );
-            if !matches!(transfer_result, Ok(Ok(()))) {
-                Self::record_failed_charge(&env, &mut subscription)?;
-                return Ok(0);
-            }
-
-            subscription.prepaid_balance = Some(remaining);
-            subscription.last_charged = next_due;
-            subscription.failed_attempts = 0;
-            subscription.status = SubscriptionStatus::Active;
-            subscription.paused_at = None;
-            Self::rollover_usage(&env, &subscription);
-            Self::store_subscription(&env, subscription_id, &subscription);
-            if let Some(trial_end) = pending_trial {
-                events::trial_converted(&env, subscription_id, trial_end);
-            }
-            events::charged(&env, &subscription, amount);
-            events::balance_debited(&env, subscription_id, amount, remaining);
-            return Ok(amount);
+            (env.current_contract_address(), Some(balance - amount))
+        } else {
+            (subscription.subscriber.clone(), None)
+        };
+        if !Self::transfer_charge(&env, &subscription, &payer, amount) {
+            Self::record_failed_charge(&env, &mut subscription)?;
+            return Ok(0);
         }
 
-        // Execute SEP-41 token transfer from subscriber to provider
-        let transfer_result = token::TokenClient::new(&env, &subscription.token).try_transfer(
-            &subscription.subscriber,
-            &subscription.provider,
-            &amount,
-        );
-
-        match transfer_result {
-            Ok(Ok(())) => {
-                subscription.last_charged = next_due;
-                subscription.failed_attempts = 0;
-                subscription.status = SubscriptionStatus::Active;
-                subscription.paused_at = None;
-                // Period rollover: the meters go in the same frame that closes
-                // the period, so the next period starts from zero units.
-                Self::rollover_usage(&env, &subscription);
-                Self::store_subscription(&env, subscription_id, &subscription);
-                if let Some(trial_end) = pending_trial {
-                    events::trial_converted(&env, subscription_id, trial_end);
-                }
-                events::charged(&env, &subscription, amount);
-                Ok(amount)
-            }
-            _ => {
-                Self::record_failed_charge(&env, &mut subscription)?;
-                Ok(0)
-            }
+        Self::close_credit_period(&env, subscription_id, credit_left);
+        subscription.prepaid_balance = prepaid_after;
+        subscription.last_charged = next_due;
+        subscription.failed_attempts = 0;
+        subscription.past_due_since = None;
+        env.storage()
+            .persistent()
+            .remove(&DataKey::GraceDeadline(subscription_id));
+        subscription.status = SubscriptionStatus::Active;
+        subscription.paused_at = None;
+        Self::rollover_usage(&env, &subscription);
+        Self::store_subscription(&env, subscription_id, &subscription);
+        if let Some(trial_end) = pending_trial {
+            events::trial_converted(&env, subscription_id, trial_end);
+        }
+        events::charged(&env, &subscription, amount);
+        if let Some(remaining) = prepaid_after {
+            events::balance_debited(&env, subscription_id, amount, remaining);
         }
         Ok(amount)
     }
@@ -1389,35 +1541,13 @@ impl SubscriptionPayments {
     ) -> Result<i128, ForgeError> {
         let (mut subscription, elapsed) = Self::catchup_terms(&env, subscription_id, max_periods)?;
         subscription.provider.require_auth();
-
-        if max_periods == 0 {
-            return Ok(0);
-        }
-
-        let now = env.ledger().timestamp();
+        let periods = elapsed.min(u64::from(max_periods));
         let pending_trial = Self::pending_trial_end(&env, &subscription);
-        let periods = match pending_trial {
-            Some(trial_end) => {
-                if now < trial_end {
-                    return Ok(0);
-                }
-                let elapsed_after_trial = now - trial_end;
-                let elapsed_periods = (elapsed_after_trial / subscription.period).saturating_add(1);
-                core::cmp::min(max_periods as u64, elapsed_periods)
-            }
-            None => {
-                let elapsed = now
-                    .checked_sub(subscription.last_charged)
-                    .ok_or(ForgeError::ArithmeticOverflow)?;
-                let elapsed_periods = elapsed / subscription.period;
-                core::cmp::min(max_periods as u64, elapsed_periods)
-            }
-        };
-
+        let mut credit = Self::available_credit(&env, subscription_id);
         let mut total = 0_i128;
-        for idx in 0..periods {
-            let converting_trial = idx == 0 && pending_trial.is_some();
-            let next_due = if let Some(trial_end) = pending_trial.filter(|_| idx == 0) {
+        for index in 0..periods {
+            let converting_trial = index == 0 && pending_trial.is_some();
+            let next_due = if let Some(trial_end) = pending_trial.filter(|_| index == 0) {
                 trial_end
             } else {
                 subscription
@@ -1479,12 +1609,24 @@ impl SubscriptionPayments {
         if sub.status != SubscriptionStatus::Active || sub.prepaid_balance.is_some() {
             return Err(ForgeError::InvalidInput);
         }
-        let elapsed = match env.ledger().timestamp().checked_sub(sub.last_charged) {
-            Some(seconds) => seconds,
-            None if limit == 0 => 0,
-            None => return Err(ForgeError::ArithmeticOverflow),
+        let now = env.ledger().timestamp();
+        let periods = match Self::pending_trial_end(env, &sub) {
+            Some(trial_end) => {
+                if now < trial_end {
+                    0
+                } else {
+                    ((now - trial_end) / sub.period).saturating_add(1)
+                }
+            }
+            None => {
+                let elapsed = match now.checked_sub(sub.last_charged) {
+                    Some(seconds) => seconds,
+                    None if limit == 0 => 0,
+                    None => return Err(ForgeError::ArithmeticOverflow),
+                };
+                elapsed / sub.period
+            }
         };
-        let periods = elapsed / sub.period;
         Ok((sub, periods))
     }
 
@@ -1734,6 +1876,9 @@ impl SubscriptionPayments {
                 soroban_forge_shared_utils::ttl::BUMP_AMOUNT,
             );
         }
+        Self::renew_credit(&env, subscription_id);
+        let subscription = Self::get_subscription_impl(&env, subscription_id)?;
+        Self::renew_policies(&env, &subscription);
         let trial_key = DataKey::TrialEnd(subscription_id);
         if env.storage().persistent().has(&trial_key) {
             bump_entry(&env, &trial_key);
@@ -2446,6 +2591,8 @@ mod metering;
 mod prepaid;
 #[cfg(test)]
 mod props;
+#[cfg(test)]
+mod settlement;
 #[cfg(test)]
 mod trial;
 

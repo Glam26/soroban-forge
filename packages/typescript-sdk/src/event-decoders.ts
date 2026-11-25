@@ -231,6 +231,14 @@ export const SUBSCRIPTION_EVENT_SPECS = {
     topics: 1,
     fields: { subscription_id: "u64", quotas: "vec<udt:MetricQuota>" },
   },
+  TrialConverted: {
+    topics: 1,
+    fields: { subscription_id: "u64", trial_end: "u64" },
+  },
+  TrialStarted: {
+    topics: 1,
+    fields: { subscription_id: "u64", trial_end: "u64" },
+  },
   UsageRecorded: {
     topics: 2,
     fields: {

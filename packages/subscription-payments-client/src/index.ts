@@ -205,6 +205,7 @@ export type SubscriptionStatus = {tag: "Active", values: void} | {tag: "Cancelle
 
 
 
+
 /**
  * Shared error type used across all Soroban Forge contracts.
  *
@@ -552,6 +553,11 @@ export interface Client {
   subscribe_with_trial: ({subscriber, provider, token, amount, period, trial_seconds}: {subscriber: string, provider: string, token: string, amount: i128, period: u64, trial_seconds: u64}, options?: MethodOptions) => Promise<AssembledTransaction<Result<u64>>>
 
   /**
+   * Construct and simulate a cancel_provider_change transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
+   */
+  cancel_provider_change: ({id}: {id: u64}, options?: MethodOptions) => Promise<AssembledTransaction<Result<void>>>
+
+  /**
    * Construct and simulate a get_subscription_count transaction. Returns an `AssembledTransaction` object which will have a `result` field containing the result of the simulation. If this transaction changes contract state, you will need to call `signAndSend()` on the returned object.
    * Total number of subscriptions created so far (read-only view).
    *
@@ -722,6 +728,7 @@ export class Client extends ContractClient {
         rollover_remaining: this.txFromJSON<Result<u64>>,
         configure_auto_topup: this.txFromJSON<Result<void>>,
         subscribe_with_trial: this.txFromJSON<Result<u64>>,
+        cancel_provider_change: this.txFromJSON<Result<void>>,
         get_subscription_count: this.txFromJSON<u64>,
         is_provider_authorized: this.txFromJSON<boolean>,
         subscribe_on_behalf_of: this.txFromJSON<Result<u64>>,
