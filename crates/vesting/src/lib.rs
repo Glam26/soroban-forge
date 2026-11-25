@@ -769,7 +769,7 @@ impl Vesting {
         env.storage()
             .instance()
             .set(&DataKey::TrancheSchedule(id), &schedule);
-        Self::index_schedule(&env, id, &schedule.beneficiary, &schedule.beneficiary);
+        Self::index_schedule(&env, id, &schedule.beneficiary, &schedule.funder);
         Ok(id)
     }
 
@@ -1427,9 +1427,8 @@ impl Vesting {
                     _ => false,
                 },
                 Ok(Stored::Tranche(schedule)) => match &key {
-                    DataKey::BeneficiaryIndex(owner) | DataKey::FunderIndex(owner) => {
-                        schedule.beneficiary == *owner
-                    }
+                    DataKey::BeneficiaryIndex(owner) => schedule.beneficiary == *owner,
+                    DataKey::FunderIndex(owner) => schedule.funder == *owner,
                     _ => false,
                 },
                 Err(_) => false,

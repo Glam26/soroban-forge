@@ -301,8 +301,7 @@ storage or publish events.
 
 Reassignment moves the ID between beneficiary indexes and keeps its creation
 position in the resulting list. The funder index stays the same. An index
-includes schedules after claims or revocation. Tranche creation records only an
-authorizing beneficiary. For discovery, the tranche ID appears under that address
-in both indexes. Token transfers into vesting custody do not establish a
-different funder for the tranche. On upgraded deployments, the queries read
-pre-index schedules from their original records.
+includes schedules after claims or revocation. Tranche creation records both a
+funder and an authorizing beneficiary, so the tranche ID appears under each
+respective address in the funder and beneficiary indexes. On upgraded
+deployments, the queries read pre-index schedules from their original records.
